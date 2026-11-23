@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Infinity Memory</title>
+  <meta name="description" content="Flashcards com repetição espaçada: texto, imagem, áudio e código." />
+  <meta name="theme-color" content="#08080F" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Infinity" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div id="app">
+    <main id="view" class="view"></main>
+    <nav class="tabbar" id="tabbar">
+      <a href="#/" data-tab="home" class="tab">
+        <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Início</span>
+      </a>
+      <a href="#/buscar" data-tab="search" class="tab">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Cards</span>
+      </a>
+      <button class="tab-fab" id="fab" aria-label="Novo card">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <a href="#/stats" data-tab="stats" class="tab">
+        <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Progresso</span>
+      </a>
+      <a href="#/ajustes" data-tab="settings" class="tab">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span>Ajustes</span>
+      </a>
+    </nav>
+  </div>
+  <div id="sheet-root"></div>
+  <div id="toast" class="toast" role="status"></div>
+  <input type="file" id="file-image" accept="image/*" hidden />
+  <input type="file" id="file-camera" accept="image/*" capture="environment" hidden />
+  <input type="file" id="file-audio" accept="audio/*" hidden />
+  <input type="file" id="file-import" accept=".json,.csv,.tsv,.txt,application/json,text/plain,text/csv" hidden />
+  <script src="js/db.js"></script>
+  <script src="js/srs.js"></script>
+  <script src="js/highlight.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
