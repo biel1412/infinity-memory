@@ -23,6 +23,7 @@ Cada lado (frente e verso) aceita vários blocos, na ordem que você quiser:
 
 ## Organização e progresso
 
+- **Seções** para organizar os baralhos (ex.: Idiomas, Faculdade, Trabalho): recolha, reordene e estude a seção inteira com um toque
 - Baralhos com ícone, cor e idioma de leitura
 - “Salvar e +1” para criar muitos cards em sequência, e opção de gerar o card **invertido**
 - **Importar lista**: cole `frente ; verso` por linha, ou dados copiados do Excel/Planilhas

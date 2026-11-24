@@ -44,7 +44,7 @@
 
   // ---------- estado ----------
   const state = {
-    decks: [], cards: [], logs: [],
+    decks: [], cards: [], logs: [], sections: [],
     settings: { theme: 'dark', newPerDay: 20, autoplay: true, tts: true },
     draft: null, side: 'front',
     session: null,
@@ -85,6 +85,13 @@
     $('meta[name="theme-color"]').content = t === 'light' ? '#F6F5FF' : '#08080F';
   }
   const deckOf = (id) => state.decks.find((d) => d.id === id);
+  const secOf = (id) => state.sections.find((x) => x.id === id);
+  const sortedSections = () => [...state.sections].sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
+  const decksIn = (secId) => state.decks.filter((d) => (secId ? d.sectionId === secId : !d.sectionId || !secOf(d.sectionId)));
+  // alvo de estudo/contagem: undefined = tudo, 'sec_…' = seção, 'd_…' = baralho
+  const targetDecks = (t) => (!t ? state.decks : String(t).startsWith('sec_') ? decksIn(t) : [deckOf(t)].filter(Boolean));
+  const targetHref = (t) => (!t ? '#/' : String(t).startsWith('sec_') ? '#/' : '#/baralho/' + t);
+  const saveSections = () => DB.setMeta('sections', state.sections);
 
   // =========================================================
   // MÍDIA
@@ -205,9 +212,9 @@
     return state.logs.filter((l) => l.ts >= s && l.prevState === 'new' && (!deckId || l.deckId === deckId)).length;
   }
   function deckLimit(d) { return d.newPerDay ?? state.settings.newPerDay; }
-  function dueCounts(deckId) {
+  function dueCounts(target) {
     const now = Date.now(), eod = endOfToday(), ahead = now + SRS.cfg.learnAheadMin * MIN;
-    const decks = deckId ? [deckOf(deckId)].filter(Boolean) : state.decks;
+    const decks = targetDecks(target);
     let n = 0, l = 0, r = 0;
     decks.forEach((d) => {
       const cs = state.cards.filter((c) => c.deckId === d.id && !c.suspended);
@@ -221,7 +228,7 @@
 
   function buildSession(deckId) {
     const now = Date.now(), eod = endOfToday();
-    const decks = deckId ? [deckOf(deckId)] : state.decks;
+    const decks = targetDecks(deckId);
     const ids = new Set(decks.map((d) => d.id));
     const cs = state.cards.filter((c) => ids.has(c.deckId) && !c.suspended);
     const learn = cs.filter((c) => (c.state === 'learning' || c.state === 'relearning') && c.due <= eod).sort((a, b) => a.due - b.due).map((c) => c.id);
@@ -315,34 +322,118 @@
         ${c.total ? `<a class="btn btn-white btn-block" href="#/estudar">Estudar agora</a>` : ''}
       </section>
 
-      <div class="section-head"><h2>Baralhos</h2><button id="new-deck">+ Novo</button></div>
-      <div class="decks">${state.decks.map((d) => {
-        const dc = dueCounts(d.id);
-        const cs = state.cards.filter((x) => x.deckId === d.id);
-        const mature = cs.filter((x) => x.state === 'review' && x.interval >= 21).length;
-        return `<a class="deck" href="#/baralho/${d.id}">
-          <div class="deck-ico" style="background:${grad(d.color)}">${d.emoji}</div>
-          <div class="meta"><b>${esc(d.name)}</b><small>${plural(cs.length, 'card')}${mature ? ` · ${mature} dominados` : ''}</small>
-            <div class="bar"><i style="width:${cs.length ? Math.round((cs.filter((x) => x.state === 'review').length / cs.length) * 100) : 0}%"></i></div></div>
-          <div class="counts"><span class="cnt n ${dc.n ? '' : 'zero'}">${dc.n}</span><span class="cnt l ${dc.l ? '' : 'zero'}">${dc.l}</span><span class="cnt r ${dc.r ? '' : 'zero'}">${dc.r}</span></div>
-        </a>`;
-      }).join('')}</div>
+      <div class="section-head"><h2>Seções</h2><div class="sh-btns"><button id="new-sec">+ Seção</button><button id="new-deck">+ Baralho</button></div></div>
+      ${!state.sections.length ? `<button class="sec-tip" id="new-sec2"><span>🗂️</span><div><b>Organize em seções</b>Agrupe baralhos por assunto: Idiomas, Faculdade, Trabalho…</div><span class="chev">›</span></button>` : ''}
+      <div class="secs">${sortedSections().map((x) => sectionBlock(x)).join('')}
+        ${decksIn(null).length ? sectionBlock(null) : ''}</div>
 
       <div class="section-head"><h2>Constância</h2><a href="#/stats">Ver progresso</a></div>
       <div class="panel">${heatmap()}
         <div class="heat-foot"><span class="streak">🔥 ${plural(st, 'dia')} seguidos</span><span>${studiedToday} hoje</span></div></div>`}`;
   }
+  function deckRow(d) {
+    const dc = dueCounts(d.id);
+    const cs = state.cards.filter((x) => x.deckId === d.id);
+    const mature = cs.filter((x) => x.state === 'review' && x.interval >= 21).length;
+    return `<a class="deck" href="#/baralho/${d.id}">
+      <div class="deck-ico" style="background:${grad(d.color)}">${d.emoji}</div>
+      <div class="meta"><b>${esc(d.name)}</b><small>${plural(cs.length, 'card')}${mature ? ` · ${mature} dominados` : ''}</small>
+        <div class="bar"><i style="width:${cs.length ? Math.round((cs.filter((x) => x.state === 'review').length / cs.length) * 100) : 0}%"></i></div></div>
+      <div class="counts"><span class="cnt n ${dc.n ? '' : 'zero'}">${dc.n}</span><span class="cnt l ${dc.l ? '' : 'zero'}">${dc.l}</span><span class="cnt r ${dc.r ? '' : 'zero'}">${dc.r}</span></div>
+    </a>`;
+  }
+  function sectionBlock(x) {
+    const decks = decksIn(x ? x.id : null).sort((a, b) => a.createdAt - b.createdAt);
+    const dc = x ? dueCounts(x.id) : decks.reduce((a, d) => { const c = dueCounts(d.id); a.total += c.total; return a; }, { total: 0 });
+    const cards = state.cards.filter((c) => decks.some((d) => d.id === c.deckId)).length;
+    const collapsed = x && x.collapsed;
+    return `<section class="sec ${collapsed ? 'collapsed' : ''} ${x ? '' : 'loose'}">
+      <div class="sec-head" ${x ? `data-toggle="${x.id}"` : ''}>
+        <span class="sec-ico" style="background:${x ? grad(x.color) : 'var(--surface-2)'}">${x ? x.emoji : '📂'}</span>
+        <div class="meta"><b>${x ? esc(x.name) : 'Sem seção'}</b><small>${plural(decks.length, 'baralho')} · ${plural(cards, 'card')}${dc.total ? ` · <span class="due">${dc.total} para hoje</span>` : ''}</small></div>
+        ${x && dc.total ? `<a class="sec-play" href="#/estudar/${x.id}" aria-label="Estudar seção">${ICON.play}</a>` : ''}
+        ${x ? `<button class="sec-more" data-secmenu="${x.id}" aria-label="Opções">${ICON.dots}</button><span class="caret">${ICON.down}</span>` : ''}
+      </div>
+      <div class="sec-body"><div class="decks">${decks.map(deckRow).join('') || '<div class="sec-empty">Nenhum baralho nesta seção ainda.</div>'}</div>
+        ${x ? `<button class="sec-add" data-newdeck="${x.id}">${ICON.plus} Novo baralho em ${esc(x.name)}</button>` : ''}</div>
+    </section>`;
+  }
+  function sectionForm(sec) {
+    const x = sec ? { ...sec } : { name: '', emoji: '🗂️', color: Math.floor(Math.random() * COLORS.length) };
+    const SEC_EMOJIS = ['🗂️', '📚', '🎓', '💼', '🌍', '🗣️', '💻', '🧪', '🩺', '⚖️', '🎵', '🎨', '🧠', '🏛️', '📈', '✈️', '🏋️', '🍳', '🙏', '⭐', '🔥', '🚀', '📝', '🎯'];
+    sheet(`<h3>${sec ? 'Editar seção' : 'Nova seção'}</h3><p>Seções agrupam baralhos do mesmo assunto, e você pode estudar a seção inteira de uma vez.</p>
+      <div class="field"><label>Nome</label><input class="input" id="x-name" maxlength="40" placeholder="Ex.: Idiomas, Faculdade, Trabalho" value="${esc(x.name)}"/></div>
+      <div class="field"><label>Ícone</label><div class="emoji-grid">${SEC_EMOJIS.map((e) => `<button data-e="${e}" class="${e === x.emoji ? 'active' : ''}">${e}</button>`).join('')}</div></div>
+      <div class="field"><label>Cor</label><div class="color-grid">${COLORS.map((c, i) => `<button data-c="${i}" class="${i === x.color ? 'active' : ''}" style="background:${grad(i)}"></button>`).join('')}</div></div>
+      ${!sec && decksIn(null).length ? `<div class="field"><label>Mover baralhos para esta seção</label><div class="pick-decks">${decksIn(null).map((d) => `<label class="pd"><input type="checkbox" value="${d.id}"><span>${d.emoji} ${esc(d.name)}</span></label>`).join('')}</div></div>` : ''}
+      <button class="btn btn-primary btn-block" id="x-save">${sec ? 'Salvar' : 'Criar seção'}</button>`, (el, close) => {
+      $$('[data-e]', el).forEach((b) => b.onclick = () => { x.emoji = b.dataset.e; $$('[data-e]', el).forEach((y) => y.classList.toggle('active', y === b)); });
+      $$('[data-c]', el).forEach((b) => b.onclick = () => { x.color = +b.dataset.c; $$('[data-c]', el).forEach((y) => y.classList.toggle('active', y === b)); });
+      $('#x-save', el).onclick = async () => {
+        x.name = $('#x-name', el).value.trim();
+        if (!x.name) return toast('Dê um nome à seção');
+        if (sec) Object.assign(secOf(sec.id), x);
+        else { x.id = 'sec_' + uid(); x.createdAt = Date.now(); x.order = Date.now(); x.collapsed = false; state.sections.push(x); }
+        const moved = $$('.pick-decks input:checked', el).map((i) => deckOf(i.value));
+        moved.forEach((d) => { d.sectionId = x.id; });
+        if (moved.length) await DB.putMany('decks', moved);
+        await saveSections();
+        close(); toast(sec ? 'Seção salva ✓' : 'Seção criada ✓'); render(true);
+      };
+      if (!sec) setTimeout(() => $('#x-name', el).focus(), 300);
+    });
+  }
+  function sectionMenu(id) {
+    const x = secOf(id); if (!x) return;
+    const list = sortedSections(); const i = list.findIndex((y) => y.id === id);
+    sheet(`<h3>${x.emoji} ${esc(x.name)}</h3><div class="menu" style="margin-top:10px">
+      ${dueCounts(id).total ? `<a href="#/estudar/${id}" data-a="go"><span class="mi">▶️</span><span class="mt">Estudar seção inteira<small>${dueCounts(id).total} cards de ${plural(decksIn(id).length, 'baralho')}</small></span></a>` : ''}
+      <button data-a="deck"><span class="mi">➕</span><span class="mt">Novo baralho nesta seção</span></button>
+      <button data-a="edit"><span class="mi">✏️</span><span class="mt">Editar seção<small>Nome, ícone e cor</small></span></button>
+      ${i > 0 ? `<button data-a="up"><span class="mi">⬆️</span><span class="mt">Mover para cima</span></button>` : ''}
+      ${i < list.length - 1 ? `<button data-a="down"><span class="mi">⬇️</span><span class="mt">Mover para baixo</span></button>` : ''}
+      <button data-a="del" style="color:var(--red)"><span class="mi">🗑️</span><span class="mt">Excluir seção<small>Os baralhos não são apagados: vão para “Sem seção”</small></span></button></div>`, (el, close) => {
+      $$('[data-a]', el).forEach((b) => b.onclick = async () => {
+        close();
+        const a = b.dataset.a;
+        if (a === 'deck') deckForm(null, id);
+        if (a === 'edit') sectionForm(x);
+        if (a === 'up' || a === 'down') {
+          const j = a === 'up' ? i - 1 : i + 1;
+          list.forEach((y, k) => { y.order = k; });
+          [list[i].order, list[j].order] = [list[j].order, list[i].order];
+          await saveSections(); render(true);
+        }
+        if (a === 'del' && await confirmSheet('Excluir seção?', `A seção “${x.name}” será removida. Os ${plural(decksIn(id).length, 'baralho')} dela continuam, em “Sem seção”.`, 'Excluir seção')) {
+          const ds = decksIn(id); ds.forEach((d) => { delete d.sectionId; });
+          if (ds.length) await DB.putMany('decks', ds);
+          state.sections = state.sections.filter((y) => y.id !== id); await saveSections();
+          toast('Seção excluída'); render(true);
+        }
+      });
+    });
+  }
+
   function bindHome() {
+    $$('#new-sec, #new-sec2').forEach((b) => b.onclick = () => sectionForm());
+    $$('[data-newdeck]').forEach((b) => b.onclick = () => deckForm(null, b.dataset.newdeck));
+    $$('[data-secmenu]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); sectionMenu(b.dataset.secmenu); });
+    $$('.sec-play').forEach((a) => a.addEventListener('click', (e) => e.stopPropagation()));
+    $$('[data-toggle]').forEach((h) => h.onclick = async () => {
+      const x = secOf(h.dataset.toggle); if (!x) return;
+      x.collapsed = !x.collapsed; h.closest('.sec').classList.toggle('collapsed', x.collapsed); await saveSections();
+    });
     $('#theme').onclick = () => { state.settings.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; saveSettings(); applyTheme(); render(); };
     $$('#new-deck').forEach((b) => b.onclick = () => deckForm());
     const demo = $('#demo'); if (demo) demo.onclick = loadDemo;
   }
 
   // ---------- baralho ----------
-  function deckForm(deck) {
-    const d = deck ? { ...deck } : { name: '', emoji: EMOJIS[Math.floor(Math.random() * 8)], color: Math.floor(Math.random() * COLORS.length), ttsLang: 'pt-BR', newPerDay: null };
+  function deckForm(deck, presetSection) {
+    const d = deck ? { ...deck } : { name: '', emoji: EMOJIS[Math.floor(Math.random() * 8)], color: Math.floor(Math.random() * COLORS.length), ttsLang: 'pt-BR', newPerDay: null, sectionId: presetSection || null };
     sheet(`<h3>${deck ? 'Editar baralho' : 'Novo baralho'}</h3>
       <div class="field" style="margin-top:12px"><label>Nome</label><input class="input" id="d-name" maxlength="60" placeholder="Ex.: Inglês — Verbos" value="${esc(d.name)}"/></div>
+      <div class="field"><label>Seção</label><select class="input" id="d-sec"><option value="">📂 Sem seção</option>${sortedSections().map((x) => `<option value="${x.id}" ${x.id === d.sectionId ? 'selected' : ''}>${x.emoji} ${esc(x.name)}</option>`).join('')}<option value="__new">➕ Nova seção…</option></select></div>
       <div class="field"><label>Ícone</label><div class="emoji-grid">${EMOJIS.map((e) => `<button data-e="${e}" class="${e === d.emoji ? 'active' : ''}">${e}</button>`).join('')}</div></div>
       <div class="field"><label>Cor</label><div class="color-grid">${COLORS.map((c, i) => `<button data-c="${i}" class="${i === d.color ? 'active' : ''}" style="background:${grad(i)}"></button>`).join('')}</div></div>
       <div class="field"><label>Idioma da leitura em voz alta</label><select class="input" id="d-lang">${Object.entries(TTS_LANGS).map(([k, v]) => `<option value="${k}" ${k === d.ttsLang ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
@@ -350,10 +441,23 @@
       <button class="btn btn-primary btn-block" id="d-save">${deck ? 'Salvar' : 'Criar baralho'}</button>`, (el, close) => {
       $$('[data-e]', el).forEach((b) => b.onclick = () => { d.emoji = b.dataset.e; $$('[data-e]', el).forEach((x) => x.classList.toggle('active', x === b)); });
       $$('[data-c]', el).forEach((b) => b.onclick = () => { d.color = +b.dataset.c; $$('[data-c]', el).forEach((x) => x.classList.toggle('active', x === b)); });
+      $('#d-sec', el).onchange = (e) => {
+        const ex = $('#d-newsec', el);
+        if (e.target.value === '__new' && !ex) { e.target.closest('.field').insertAdjacentHTML('beforeend', '<input class="input" id="d-newsec" maxlength="40" placeholder="Nome da nova seção" style="margin-top:8px"/>'); $('#d-newsec', el).focus(); }
+        else if (e.target.value !== '__new' && ex) ex.remove();
+      };
       $('#d-save', el).onclick = async () => {
         d.name = $('#d-name', el).value.trim();
         if (!d.name) return toast('Dê um nome ao baralho');
         d.ttsLang = $('#d-lang', el).value; d.newPerDay = $('#d-new', el).value ? +$('#d-new', el).value : null;
+        let sv = $('#d-sec', el).value;
+        if (sv === '__new') {
+          const nm = ($('#d-newsec', el) && $('#d-newsec', el).value.trim()) || '';
+          if (!nm) return toast('Dê um nome à nova seção');
+          const x = { id: 'sec_' + uid(), name: nm, emoji: '🗂️', color: d.color, createdAt: Date.now(), order: Date.now(), collapsed: false };
+          state.sections.push(x); await saveSections(); sv = x.id;
+        }
+        d.sectionId = sv || null;
         if (!deck) { d.id = 'd_' + uid(); d.createdAt = Date.now(); state.decks.push(d); }
         else Object.assign(deckOf(deck.id), d);
         await DB.put('decks', deck ? deckOf(deck.id) : d);
@@ -374,7 +478,7 @@
       <div class="topbar"><a class="back" href="#/">${ICON.back} Início</a>
         <button class="icon-btn" id="deck-menu" aria-label="Opções">${ICON.dots}</button></div>
       <section class="deck-hero" style="background:${grad(d.color)}">
-        <div class="dh-top"><div class="deck-ico">${d.emoji}</div><div style="min-width:0"><h1>${esc(d.name)}</h1><p>${plural(cs.length, 'card')} · 🔊 ${TTS_LANGS[d.ttsLang] || 'Português'}</p></div></div>
+        <div class="dh-top"><div class="deck-ico">${d.emoji}</div><div style="min-width:0"><h1>${esc(d.name)}</h1><p>${secOf(d.sectionId) ? `${secOf(d.sectionId).emoji} ${esc(secOf(d.sectionId).name)} · ` : ''}${plural(cs.length, 'card')} · 🔊 ${TTS_LANGS[d.ttsLang] || 'Português'}</p></div></div>
         <div class="dh-stats"><div><b>${dc.n}</b><small>Novos</small></div><div><b>${dc.l}</b><small>Aprendendo</small></div><div><b>${dc.r}</b><small>Revisão</small></div></div>
         <div class="row-btns" style="margin-top:14px">
           <a class="btn btn-white" href="#/estudar/${d.id}" ${dc.total ? '' : 'style="opacity:.55;pointer-events:none"'}>${dc.total ? 'Estudar' : 'Em dia ✓'}</a>
@@ -403,7 +507,7 @@
     if (q) q.oninput = () => { state.filter.q = q.value; const cs = state.cards.filter((c) => c.deckId === id); const s = q.value.toLowerCase(); $('#clist').innerHTML = cardRows(cs.filter((c) => !s || (summary(c.front) + ' ' + summary(c.back)).toLowerCase().includes(s)).sort((a, b) => b.createdAt - a.createdAt)); };
     const it = $('#imp-txt'); if (it) it.onclick = () => importTextSheet(id);
     $('#deck-menu').onclick = () => sheet(`<h3>${d.emoji} ${esc(d.name)}</h3><div class="menu" style="margin-top:10px">
-        <button data-a="edit"><span class="mi">✏️</span><span class="mt">Editar baralho<small>Nome, ícone, cor, idioma, limite diário</small></span></button>
+        <button data-a="edit"><span class="mi">✏️</span><span class="mt">Editar baralho<small>Nome, seção, ícone, cor, idioma, limite diário</small></span></button>
         <button data-a="import"><span class="mi">📋</span><span class="mt">Importar lista<small>Cole “frente ; verso” por linha</small></span></button>
         <button data-a="reset"><span class="mi">↺</span><span class="mt">Recomeçar progresso<small>Todos os cards voltam a ser novos</small></span></button>
         <button data-a="del" style="color:var(--red)"><span class="mi">🗑️</span><span class="mt">Excluir baralho</span></button></div>`, (el, close) => {
@@ -478,7 +582,7 @@
       <div class="ed-head"><a class="icon-btn" href="${editing ? '#/baralho/' + D.deckId : '#/baralho/' + D.deckId}" data-leave aria-label="Voltar">${ICON.back}</a>
         <h1>${editing ? 'Editar card' : 'Novo card'}</h1>
         ${editing ? `<button class="icon-btn" id="del-card" style="color:var(--red)" aria-label="Excluir">${ICON.trash}</button>` : ''}</div>
-      <div class="field"><label>Baralho</label><select class="input" id="e-deck">${state.decks.map((d) => `<option value="${d.id}" ${d.id === D.deckId ? 'selected' : ''}>${d.emoji} ${esc(d.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Baralho</label><select class="input" id="e-deck">${[...sortedSections(), null].map((x) => { const ds = decksIn(x ? x.id : null); if (!ds.length) return ''; const opts = ds.map((d) => `<option value="${d.id}" ${d.id === D.deckId ? 'selected' : ''}>${d.emoji} ${esc(d.name)}</option>`).join(''); return state.sections.length ? `<optgroup label="${x ? esc(x.emoji + ' ' + x.name) : 'Sem seção'}">${opts}</optgroup>` : opts; }).join('')}</select></div>
       <div class="side-tabs">
         <button data-side="front" class="${state.side === 'front' ? 'active' : ''}">Frente <em>${D.front.length}</em></button>
         <button data-side="back" class="${state.side === 'back' ? 'active' : ''}">Verso <em>${D.back.length}</em></button>
@@ -645,7 +749,7 @@
     const prog = S.total ? Math.min(1, S.done / (S.done + left)) : 1;
     const pv = SRS.preview(c);
     return `<div class="study">
-      <div class="st-top"><a class="icon-btn" href="${S.deckId ? '#/baralho/' + S.deckId : '#/'}" id="quit" aria-label="Sair">${ICON.x}</a>
+      <div class="st-top"><a class="icon-btn" href="${targetHref(S.deckId)}" id="quit" aria-label="Sair">${ICON.x}</a>
         <div class="st-progress"><i style="width:${prog * 100}%"></i></div>
         <button class="icon-btn" id="undo" aria-label="Desfazer" ${S.history.length ? '' : 'style="opacity:.35"'}>${ICON.undo}</button></div>
       <div class="st-counts"><span class="n ${S.current.kind === 'n' ? 'cur' : ''}">${S.fresh.length}</span><span class="l ${S.current.kind === 'l' ? 'cur' : ''}">${S.learn.length}</span><span class="r ${S.current.kind === 'r' ? 'cur' : ''}">${S.review.length}</span></div>
@@ -678,7 +782,7 @@
       <p>${waiting ? `Há ${plural(S.learn.length, 'card')} em aprendizado. O próximo volta em ${SRS.fmt(waiting.due - Date.now())}.` : S.done ? 'Sua memória agradece. Os cards voltam no momento certo para fixar de vez.' : 'Você está em dia com este baralho.'}</p>
       ${S.done ? `<div class="done-stats"><div><b>${S.done}</b><small>revisões</small></div><div><b>${acc}%</b><small>acertos</small></div><div><b>${mins}</b><small>minuto${mins > 1 ? 's' : ''}</small></div></div>` : ''}
       ${waiting ? `<button class="btn btn-primary btn-block" id="ahead">Revisar agora mesmo assim</button>` : ''}
-      <a class="btn ${waiting ? 'btn-ghost' : 'btn-primary'} btn-block" href="${S.deckId ? '#/baralho/' + S.deckId : '#/'}">Voltar</a>
+      <a class="btn ${waiting ? 'btn-ghost' : 'btn-primary'} btn-block" href="${targetHref(S.deckId)}">Voltar</a>
     </div>`;
   }
   let keyHandler = null;
@@ -860,7 +964,7 @@
     $('#s-wipe').onclick = async () => {
       if (!(await confirmSheet('Apagar tudo?', 'Todos os baralhos, cards, mídias e o histórico serão apagados deste aparelho. Exporte um backup antes se quiser guardar.', 'Apagar tudo'))) return;
       for (const s of ['decks', 'cards', 'logs', 'media']) await DB.clear(s);
-      state.decks = []; state.cards = []; state.logs = []; toast('Tudo apagado'); location.hash = '#/';
+      state.decks = []; state.cards = []; state.logs = []; state.sections = []; await saveSections(); toast('Tudo apagado'); location.hash = '#/';
     };
   }
   function saveSettings() { DB.setMeta('settings', state.settings); }
@@ -872,7 +976,7 @@
     const used = new Set(); state.cards.forEach((c) => [...c.front, ...c.back].forEach((b) => b.mediaId && used.add(b.mediaId)));
     const mediaOut = [];
     for (const m of media.filter((x) => used.has(x.id))) mediaOut.push({ id: m.id, type: m.type, data: await blobToB64(m.blob) });
-    const data = { app: 'infinity-memory', version: 1, exportedAt: new Date().toISOString(), settings: state.settings, decks: state.decks, cards: state.cards, logs: state.logs, media: mediaOut };
+    const data = { app: 'infinity-memory', version: 1, exportedAt: new Date().toISOString(), settings: state.settings, sections: state.sections, decks: state.decks, cards: state.cards, logs: state.logs, media: mediaOut };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const name = `infinity-memory-${new Date().toISOString().slice(0, 10)}.json`;
     const file = new File([blob], name, { type: 'application/json' });
@@ -887,6 +991,7 @@
       if (!Array.isArray(data.cards) || !Array.isArray(data.decks)) return toast('Este não é um backup do Infinity Memory');
       if (!(await confirmSheet('Importar backup?', `${plural(data.decks.length, 'baralho')} e ${plural(data.cards.length, 'card')} serão adicionados (itens com o mesmo ID são atualizados).`, 'Importar', false))) return;
       for (const m of data.media || []) { const blob = await (await fetch(m.data)).blob(); await DB.put('media', { id: m.id, blob, type: m.type, size: blob.size, ts: Date.now() }); }
+      if (Array.isArray(data.sections)) { const ids = new Set(state.sections.map((x) => x.id)); data.sections.forEach((x) => { if (ids.has(x.id)) Object.assign(secOf(x.id), x); else state.sections.push(x); }); await saveSections(); }
       await DB.putMany('decks', data.decks); await DB.putMany('cards', data.cards); if (Array.isArray(data.logs)) await DB.putMany('logs', data.logs);
       await loadAll(); toast('Backup importado ✓'); location.hash = '#/'; render();
       return;
@@ -902,10 +1007,13 @@
   // ---------- exemplos ----------
   async function loadDemo() {
     const now = Date.now();
-    const mk = (name, emoji, color, ttsLang) => ({ id: 'd_' + uid(), name, emoji, color, ttsLang, newPerDay: null, createdAt: now });
-    const en = mk('Inglês — Essencial', '🇺🇸', 1, 'en-US');
-    const js = mk('JavaScript', '⚛️', 4, 'pt-BR');
-    const geo = mk('Capitais do mundo', '🌎', 3, 'pt-BR');
+    const ms = (name, emoji, color, k) => ({ id: 'sec_' + uid(), name, emoji, color, createdAt: now + k, order: now + k, collapsed: false });
+    const sIdi = ms('Idiomas', '🗣️', 1, 0), sProg = ms('Programação', '💻', 4, 1), sGer = ms('Conhecimentos gerais', '🧠', 3, 2);
+    state.sections.push(sIdi, sProg, sGer); await saveSections();
+    const mk = (name, emoji, color, ttsLang, sectionId) => ({ id: 'd_' + uid(), name, emoji, color, ttsLang, newPerDay: null, createdAt: now, sectionId });
+    const en = mk('Inglês — Essencial', '🇺🇸', 1, 'en-US', sIdi.id);
+    const js = mk('JavaScript', '⚛️', 4, 'pt-BR', sProg.id);
+    const geo = mk('Capitais do mundo', '🌎', 3, 'pt-BR', sGer.id);
     const cards = [];
     let t = now;
     const add = (deck, front, back) => cards.push(newCard(deck.id, front, back, t++));
@@ -971,6 +1079,7 @@
     [state.decks, state.cards, state.logs] = await Promise.all([DB.all('decks'), DB.all('cards'), DB.all('logs')]);
     state.decks.sort((a, b) => a.createdAt - b.createdAt);
     state.settings = { ...state.settings, ...(await DB.getMeta('settings', {})) };
+    state.sections = await DB.getMeta('sections', []);
   }
 
   async function init() {
