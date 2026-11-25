@@ -96,7 +96,26 @@
   // =========================================================
   // MÍDIA
   // =========================================================
+  async function sniffType(blob) {
+    try {
+      const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const str = (i, n) => String.fromCharCode(...b.slice(i, i + n));
+      if (str(4, 4) === 'ftyp') return 'audio/mp4';
+      if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'audio/webm';
+      if (str(0, 4) === 'OggS') return 'audio/ogg';
+      if (str(0, 4) === 'RIFF') return 'audio/wav';
+      if (str(0, 3) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return 'audio/mpeg';
+      if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
+      if (str(1, 3) === 'PNG') return 'image/png';
+    } catch {}
+    return '';
+  }
+  async function withType(blob, hint) {
+    const t = blob.type && blob.type !== 'application/octet-stream' ? blob.type : (hint || await sniffType(blob));
+    return t && t !== blob.type ? new Blob([blob], { type: t }) : blob;
+  }
   async function saveMedia(blob) {
+    blob = await withType(blob);
     const id = 'm_' + uid();
     await DB.put('media', { id, blob, type: blob.type, size: blob.size, ts: Date.now() });
     mediaUrls.set(id, URL.createObjectURL(blob));
@@ -106,7 +125,8 @@
     if (mediaUrls.has(id)) return mediaUrls.get(id);
     const m = await DB.get('media', id);
     if (!m) return '';
-    const u = URL.createObjectURL(m.blob); mediaUrls.set(id, u); return u;
+    const blob = await withType(m.blob, m.type);
+    const u = URL.createObjectURL(blob); mediaUrls.set(id, u); return u;
   }
   async function cleanupMedia() {
     const used = new Set();
@@ -165,27 +185,68 @@
   }
 
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  let currentAudio = null;
-  function stopAudio() { if (currentAudio) { currentAudio.pause(); currentAudio = null; } $$('.c-audio .play').forEach((b) => { b.innerHTML = ICON.play; }); }
+  // Um único elemento <audio>, desbloqueado no primeiro toque: assim o iPhone
+  // permite tocar depois (inclusive o áudio automático ao virar o card).
+  const SILENT = 'data:audio/wav;base64,UklGRmQGAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YUAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const player = new Audio();
+  player.setAttribute('playsinline', ''); player.preload = 'auto';
+  let owner = null, unlocked = false;
+  function unlockAudio() {
+    if (unlocked) return;
+    unlocked = true;
+    if (!owner) { player.src = SILENT; player.play().then(() => { if (player.src === SILENT) player.pause(); }).catch(() => { unlocked = false; }); }
+    if ('speechSynthesis' in window) { try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {} }
+  }
+  document.addEventListener('pointerdown', unlockAudio, { capture: true });
+  document.addEventListener('touchend', unlockAudio, { capture: true });
+  const ui = (box) => box && { btn: $('.play', box), bar: $('.track i', box), time: $('.time', box) };
+  function resetUI(box) { const u = ui(box); if (!u || !u.btn) return; u.btn.innerHTML = ICON.play; u.bar.style.width = '0%'; if (box._dur) u.time.textContent = fmtTime(box._dur); }
+  player.addEventListener('timeupdate', () => { const u = ui(owner); if (!u || !player.duration) return; u.bar.style.width = (player.currentTime / player.duration) * 100 + '%'; u.time.textContent = fmtTime(player.currentTime); });
+  player.addEventListener('loadedmetadata', () => { if (owner && isFinite(player.duration)) owner._dur = player.duration; });
+  player.addEventListener('ended', () => { const b = owner; owner = null; resetUI(b); });
+  player.addEventListener('pause', () => { const u = ui(owner); if (u && u.btn) u.btn.innerHTML = ICON.play; });
+  player.addEventListener('play', () => { const u = ui(owner); if (u && u.btn) u.btn.innerHTML = ICON.pause; });
+  player.addEventListener('error', () => {
+    if (!owner || player.src === SILENT) return;
+    const b = owner; owner = null; resetUI(b);
+    toast('Este áudio não pode ser tocado neste aparelho (formato ' + (b._type || 'desconhecido') + '). Grave de novo por aqui.', 4500);
+  });
+  function playBox(box) {
+    if (!box || !box._url) return;
+    if (owner === box && !player.paused) { player.pause(); return; }
+    const prev = owner; owner = box; if (prev && prev !== box) resetUI(prev);
+    if (player.src !== box._url) player.src = box._url;
+    if (owner === box && player.ended) player.currentTime = 0;
+    const p = player.play();
+    if (p) p.catch((e) => {
+      if (e.name === 'NotAllowedError') toast('Toque no ▶ para ouvir o áudio');
+      else if (e.name !== 'AbortError') toast('Não foi possível tocar este áudio');
+      const u = ui(box); if (u && u.btn) u.btn.innerHTML = ICON.play;
+    });
+  }
+  function stopAudio() { if (owner) { const b = owner; owner = null; player.pause(); resetUI(b); } }
   async function hydrate(root) {
     for (const img of $$('img[data-media]', root)) {
       img.src = await mediaUrl(img.dataset.media);
       img.onclick = (e) => { e.stopPropagation(); const z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = `<img src="${img.src}" alt="">`; z.onclick = () => z.remove(); document.body.appendChild(z); };
     }
     for (const box of $$('[data-audio]', root)) {
-      const url = await mediaUrl(box.dataset.audio);
-      const audio = new Audio(url); audio.preload = 'metadata';
-      const btn = $('.play', box), bar = $('.track i', box), time = $('.time', box);
-      audio.onloadedmetadata = () => { if (isFinite(audio.duration)) time.textContent = fmtTime(audio.duration); };
-      audio.ontimeupdate = () => { if (audio.duration) bar.style.width = (audio.currentTime / audio.duration) * 100 + '%'; time.textContent = fmtTime(audio.currentTime); };
-      audio.onended = () => { btn.innerHTML = ICON.play; bar.style.width = '0%'; currentAudio = null; };
-      btn.onclick = (e) => {
+      box._url = await mediaUrl(box.dataset.audio);
+      const rec = await DB.get('media', box.dataset.audio);
+      box._type = rec ? (rec.type || rec.blob.type) : '';
+      if (!box._url) { $('.time', box).textContent = 'ausente'; continue; }
+      // duração sem tocar (onde o navegador permitir)
+      const probe = new Audio(); probe.preload = 'metadata';
+      probe.onloadedmetadata = () => { if (isFinite(probe.duration)) { box._dur = probe.duration; if (owner !== box) $('.time', box).textContent = fmtTime(probe.duration); } probe.src = ''; };
+      probe.src = box._url;
+      const btn = $('.play', box);
+      btn.onclick = (e) => { e.stopPropagation(); playBox(box); };
+      $('.track', box).onclick = (e) => {
         e.stopPropagation();
-        if (!audio.paused) { audio.pause(); btn.innerHTML = ICON.play; return; }
-        stopAudio(); currentAudio = audio; audio.play().catch(() => {}); btn.innerHTML = ICON.pause;
+        if (owner !== box) { playBox(box); return; }
+        const r = e.currentTarget.getBoundingClientRect(); if (player.duration) player.currentTime = ((e.clientX - r.left) / r.width) * player.duration;
       };
-      $('.track', box).onclick = (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); if (audio.duration) audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration; };
-      box._play = () => btn.click();
+      box._play = () => playBox(box);
     }
     $$('[data-copy-code]', root).forEach((b) => b.onclick = async (e) => {
       e.stopPropagation();
@@ -195,13 +256,17 @@
     $$('[data-speak]', root).forEach((b) => b.onclick = (e) => { e.stopPropagation(); speak(b.dataset.speak, b.dataset.lang); });
   }
   function speak(text, lang) {
-    if (!('speechSynthesis' in window)) return;
-    speechSynthesis.cancel();
+    if (!('speechSynthesis' in window)) { toast('Leitura em voz alta não disponível neste navegador'); return; }
+    stopAudio();
+    speechSynthesis.cancel(); speechSynthesis.resume();
     const u = new SpeechSynthesisUtterance(text.replace(/[*=`]/g, ''));
-    u.lang = lang || 'pt-BR'; u.rate = 0.95;
-    const v = speechSynthesis.getVoices().find((x) => x.lang.replace('_', '-').startsWith(u.lang.slice(0, 2)));
+    u.lang = lang || 'pt-BR'; u.rate = 0.95; u.volume = 1;
+    const voices = speechSynthesis.getVoices();
+    const v = voices.find((x) => x.lang.replace('_', '-') === u.lang) || voices.find((x) => x.lang.replace('_', '-').startsWith(u.lang.slice(0, 2)));
     if (v) u.voice = v;
-    speechSynthesis.speak(u);
+    else if (voices.length) toast('Sem voz instalada para este idioma; usando a voz padrão do aparelho', 3000);
+    u.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') toast('Não foi possível ler em voz alta (' + e.error + ')'); };
+    setTimeout(() => speechSynthesis.speak(u), 60);
   }
 
   // =========================================================
@@ -718,7 +783,7 @@
       if (rec && rec.state === 'recording') { rec.stop(); return; }
       try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
       catch { toast('Permita o uso do microfone para gravar', 3500); return; }
-      const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg'].find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+      const mime = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
       rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       chunks = [];
       rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);

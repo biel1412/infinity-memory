@@ -418,3 +418,7 @@ select.input option { background: var(--solid); color: var(--text); }
 .pick-decks { display: flex; flex-direction: column; gap: 6px; }
 .pd { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); font-weight: 600; font-size: 14.5px; }
 .pd input { width: 18px; height: 18px; accent-color: #8B5CF6; }
+
+/* Safari: só a face visível recebe toques (corrige botões no verso do card) */
+.flip:not(.flipped) .face-back { pointer-events: none; }
+.flip.flipped .face-front { pointer-events: none; }
